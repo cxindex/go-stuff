@@ -1,0 +1,107 @@
+diff -r 02553c89d661 src/cmd/gc/go.h
+--- a/src/cmd/gc/go.h	Tue Dec 17 12:59:13 2013 +0400
++++ b/src/cmd/gc/go.h	Thu Dec 19 05:07:31 2013 +0400
+@@ -969,6 +969,7 @@
+ EXTERN	int	compiling_wrappers;
+ EXTERN	int	pure_go;
+ EXTERN	char*	flag_installsuffix;
++EXTERN	int	flag_ignoreunused;
+ EXTERN	int	flag_race;
+ EXTERN	int	flag_largemodel;
+ EXTERN	int	noescape;
+diff -r 02553c89d661 src/cmd/gc/lex.c
+--- a/src/cmd/gc/lex.c	Tue Dec 17 12:59:13 2013 +0400
++++ b/src/cmd/gc/lex.c	Thu Dec 19 05:07:31 2013 +0400
+@@ -269,6 +269,7 @@
+ 	flagstr("p", "path: set expected package import path", &myimportpath);
+ 	flagcount("r", "debug generated wrappers", &debug['r']);
+ 	flagcount("race", "enable race detector", &flag_race);
++	flagcount("ignoreunused", "ignore unused", &flag_ignoreunused);
+ 	flagcount("s", "warn about composite literals that can be simplified", &debug['s']);
+ 	flagcount("u", "reject unsafe code", &safemode);
+ 	flagcount("v", "increase debug verbosity", &debug['v']);
+@@ -2294,10 +2295,18 @@
+ 		elem++;
+ 	else
+ 		elem = path->s;
+-	if(name == nil || strcmp(elem, name) == 0)
+-		yyerrorl(lineno, "imported and not used: \"%Z\"", path);
+-	else
+-		yyerrorl(lineno, "imported and not used: \"%Z\" as %s", path, name);
++
++	if(flag_ignoreunused) {
++		if(name == nil || strcmp(elem, name) == 0)
++                	warnl(lineno, "[W] imported and not used: \"%Z\"", path);
++		else
++			warnl(lineno, "[W] imported and not used: \"%Z\" as %s", path, name);
++	} else {
++		if(name == nil || strcmp(elem, name) == 0)
++                	yyerrorl(lineno, "imported and not used: \"%Z\"", path);
++        	else
++                	yyerrorl(lineno, "imported and not used: \"%Z\" as %s", path, name);
++	}
+ }
+ 
+ void
+diff -r 02553c89d661 src/cmd/gc/walk.c
+--- a/src/cmd/gc/walk.c	Tue Dec 17 12:59:13 2013 +0400
++++ b/src/cmd/gc/walk.c	Thu Dec 19 05:07:31 2013 +0400
+@@ -64,11 +64,17 @@
+ 			if(l->n->defn->left->used)
+ 				continue;
+ 			lineno = l->n->defn->left->lineno;
+-			yyerror("%S declared and not used", l->n->sym);
++			if(flag_ignoreunused)
++				warn("[W] %S declared and not used", l->n->sym);
++			else
++				yyerror("%S declared and not used", l->n->sym);
+ 			l->n->defn->left->used = 1; // suppress repeats
+ 		} else {
+ 			lineno = l->n->lineno;
+-			yyerror("%S declared and not used", l->n->sym);
++			if(flag_ignoreunused)
++				warn("[W] %S declared and not used", l->n->sym);
++			else
++				yyerror("%S declared and not used", l->n->sym);
+ 		}
+ 	}	
+ 
+diff -r 02553c89d661 src/cmd/go/build.go
+--- a/src/cmd/go/build.go	Tue Dec 17 12:59:13 2013 +0400
++++ b/src/cmd/go/build.go	Thu Dec 19 05:07:31 2013 +0400
+@@ -69,6 +69,8 @@
+ 	-x
+ 		print the commands.
+ 
++	-ignoreunused
++		Make all "not used" errors into warnings.
+ 	-ccflags 'arg list'
+ 		arguments to pass on each 5c, 6c, or 8c compiler invocation.
+ 	-compiler name
+@@ -111,6 +113,7 @@
+ }
+ 
+ // Flags set by multiple commands.
++var buildIgnoreunused bool    // -ignoreunused flag
+ var buildA bool               // -a flag
+ var buildN bool               // -n flag
+ var buildP = runtime.NumCPU() // -p flag
+@@ -161,6 +164,7 @@
+ // addBuildFlags adds the flags common to the build and install commands.
+ func addBuildFlags(cmd *Command) {
+ 	// NOTE: If you add flags here, also add them to testflag.go.
++	cmd.Flag.BoolVar(&buildIgnoreunused, "ignoreunused", false, "")
+ 	cmd.Flag.BoolVar(&buildA, "a", false, "")
+ 	cmd.Flag.BoolVar(&buildN, "n", false, "")
+ 	cmd.Flag.IntVar(&buildP, "p", buildP, "")
+@@ -1515,6 +1519,10 @@
+ 		gcargs = append(gcargs, "-+")
+ 	}
+ 
++	if buildIgnoreunused {
++		gcargs = append(gcargs, "-ignoreunused")
++	}
++
+ 	// If we're giving the compiler the entire package (no C etc files), tell it that,
+ 	// so that it can give good error messages about forward declarations.
+ 	// Exceptions: a few standard packages have forward declarations for
